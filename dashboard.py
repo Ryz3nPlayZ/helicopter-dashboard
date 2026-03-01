@@ -26,6 +26,9 @@ def get_stock_data(tickers):
             prev = info.get('regularMarketPreviousClose')
             change = ((current - prev) / prev * 100) if current and prev else 0
             
+            # Get close prices for chart
+            closes = hist['Close'].tolist() if not hist.empty else []
+            
             data[ticker] = {
                 'name': info.get('shortName', ticker),
                 'price': current,
@@ -34,52 +37,44 @@ def get_stock_data(tickers):
                 'volume': info.get('volume'),
                 'high': info.get('dayHigh'),
                 'low': info.get('dayLow'),
-                'history': hist['Close'].tolist() if not hist.empty else []
+                'closes': closes
             }
         except Exception as e:
             data[ticker] = {'error': str(e)}
     return data
 
-def create_chart(history, width=50, height=12):
-    """Create ASCII chart from price history"""
-    if not history or len(history) < 2:
+def create_line_chart(closes, width=50, height=10):
+    """Create a readable line chart"""
+    if not closes or len(closes) < 2:
         return "No data"
     
-    # Sample to fit width
-    step = max(1, len(history) // width)
-    sampled = history[::step][:width]
+    # Sample data
+    step = max(1, len(closes) // width)
+    sampled = closes[::step][:width]
     
-    if not sampled:
-        return "No data"
-    
-    # Normalize to 0-100
     min_p = min(sampled)
     max_p = max(sampled)
-    range_p = max_p - min_p if max_p != min_p else 1
-    
-    normalized = [(p - min_p) / range_p * (height - 1) for p in sampled]
+    price_range = max_p - min_p if max_p != min_p else 1
     
     # Build chart
     lines = []
     for row in range(height - 1, -1, -1):
         line = ""
-        for val in normalized:
-            if int(val) == row:
+        for p in sampled:
+            pct = (p - min_p) / price_range
+            if pct >= (row + 1) / height:
                 line += "█"
-            elif int(val) > row:
-                line += "░"
+            elif pct >= row / height:
+                line += "▄"
             else:
                 line += " "
         lines.append(line)
     
-    # Add price axis
-    prices = [min_p + (max_p - min_p) * (1 - row/(height-1)) for row in range(height)]
+    # Add price labels
     result = ""
+    prices = [max_p - (max_p - min_p) * i / (height - 1) for i in range(height)]
     for i, line in enumerate(lines):
-        result += f"{prices[i]:10.2f} │{line}\n"
-    
-    result += " " * 10 + " └" + "─" * len(lines[0]) + "\n"
-    result += " " * 10 + "  " + "L" + " " * (len(lines[0])//2 - 1) + "R"
+        result += f"{prices[i]:8.0f} │{line}\n"
     
     return result
 
@@ -96,12 +91,11 @@ def main():
         try:
             data = get_stock_data(tickers)
             
-            # Watchlist Table
+            # Watchlist
             watchlist = Table(title="📋 Watchlist", box=None)
-            watchlist.add_column("Symbol", style="cyan", width=10)
+            watchlist.add_column("Sym", style="cyan", width=8)
             watchlist.add_column("Price", justify="right", style="green", width=12)
-            watchlist.add_column("Change", justify="right", width=10)
-            watchlist.add_column("Volume", justify="right", style="dim", width=12)
+            watchlist.add_column("Chg", justify="right", width=8)
             
             for ticker, info in data.items():
                 if 'error' in info:
@@ -111,54 +105,49 @@ def main():
                 change_str = f"{change:+.2f}%"
                 change_style = "green" if change >= 0 else "red"
                 
-                vol = info.get('volume', 0)
-                if vol > 1e9:
-                    vol_str = f"{vol/1e9:.2f}B"
-                elif vol > 1e6:
-                    vol_str = f"{vol/1e6:.2f}M"
-                else:
-                    vol_str = str(vol)
-                
                 watchlist.add_row(
                     ticker,
-                    f"${info.get('price', 0):.2f}",
-                    Text(change_str, style=change_style),
-                    vol_str
+                    f"${info.get('price', 0):,.2f}",
+                    Text(change_str, style=change_style)
                 )
             
             # Portfolio
             portfolio = Table(title="💼 Portfolio", box=None)
             portfolio.add_column("Asset", style="cyan")
-            portfolio.add_column("Qty", style="yellow")
             portfolio.add_column("Value", style="green")
             portfolio.add_column("Pct", style="magenta")
             
             holdings = [
-                ("BTC", "1.25", "$120,917", "45%"),
-                ("ETH", "8.5", "$29,376", "11%"),
-                ("SOL", "150", "$21,349", "8%"),
-                ("NVDA", "25", "$22,311", "8%"),
-                ("USDC", "$58,000", "$58,000", "21%"),
+                ("BTC", "$120,917", "45%"),
+                ("ETH", "$29,376", "11%"),
+                ("SOL", "$21,349", "8%"),
+                ("NVDA", "$22,311", "8%"),
+                ("USDC", "$58,000", "21%"),
             ]
-            for asset, qty, val, pct in holdings:
-                portfolio.add_row(asset, qty, val, pct)
+            for asset, val, pct in holdings:
+                portfolio.add_row(asset, val, pct)
             
-            # Chart
-            first_data = data.get(tickers[0], {})
-            history = first_data.get('history', [])
-            chart = create_chart(history)
+            # Charts
+            charts = Table(box=None)
+            charts.add_column("Sym", style="cyan", width=8)
+            charts.add_column("Chart", width=55)
+            
+            for ticker in tickers[:3]:
+                info = data.get(ticker, {})
+                closes = info.get('closes', [])
+                chart = create_line_chart(closes)
+                charts.add_row(ticker, f"[yellow]{chart}[/yellow]")
             
             # Display
             console.print("\n")
             console.print(watchlist)
             console.print("\n")
+            console.print(Panel(portfolio, border_style="green", width=30))
+            console.print("\n")
+            console.print(charts)
             
-            # Split view
-            console.print(Panel(portfolio, title="💼 Portfolio", border_style="green", width=50))
-            console.print(Panel(chart, title=f"📊 {tickers[0]} Chart", border_style="yellow", width=60))
-            
-            console.print(f"\n[dim]Updated: {time.strftime('%H:%M:%S')} | Refresh in 5s...[/dim]")
-            time.sleep(5)
+            console.print(f"\n[dim]Updated: {time.strftime('%H:%M:%S')} | Ctrl+C to exit[/dim]")
+            time.sleep(10)
             console.clear()
             
         except KeyboardInterrupt:
